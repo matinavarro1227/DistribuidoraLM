@@ -5,6 +5,40 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Distribuidora Lugones Montini</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+
+<!-- ══ FIREBASE ══ -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
+  import { getDatabase, ref, set, get, onValue, child } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-database.js";
+
+  // ══════════════════════════════════════════════════
+  //  ⚙️  PEGÁ TU CONFIGURACIÓN DE FIREBASE AQUÍ
+  // ══════════════════════════════════════════════════
+  const firebaseConfig = {
+  apiKey: "AIzaSyDOfogkGkbQQxdlVR74IEgCQ4YyVqRrdCw",
+  authDomain: "distribuidora-lm.firebaseapp.com",
+  databaseURL: "https://distribuidora-lm-default-rtdb.firebaseio.com",
+  projectId: "distribuidora-lm",
+  storageBucket: "distribuidora-lm.firebasestorage.app",
+  messagingSenderId: "229584494907",
+  appId: "1:229584494907:web:43c1b95575908f466e171e",
+  measurementId: "G-HWN2RSP570"
+
+  };
+  // ══════════════════════════════════════════════════
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+  window._db = db;
+  window._ref = ref;
+  window._set = set;
+  window._get = get;
+  window._onValue = onValue;
+  window._child = child;
+  window._firebaseReady = true;
+  window.dispatchEvent(new Event('firebaseReady'));
+</script>
+
 <style>
 :root {
   --azul:       #0d4a6b;
@@ -29,6 +63,18 @@
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;}
+
+/* ── SYNC BANNER ── */
+#sync-banner{position:fixed;top:66px;left:0;right:0;z-index:199;padding:6px 16px;font-size:12px;font-weight:600;text-align:center;display:none;transition:background 0.3s;}
+#sync-banner.syncing{display:block;background:#fff3cd;color:#856404;}
+#sync-banner.ok{display:block;background:#d4edda;color:#155724;}
+#sync-banner.error{display:block;background:#fdf0f0;color:var(--danger);}
+
+/* ── LOADING OVERLAY ── */
+#loading-overlay{position:fixed;inset:0;background:rgba(13,74,107,0.92);z-index:9998;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:white;}
+#loading-overlay.hidden{display:none;}
+.loading-spin{width:44px;height:44px;border:4px solid rgba(255,255,255,0.25);border-top-color:white;border-radius:50%;animation:spin 0.8s linear infinite;}
+#loading-msg{font-size:14px;opacity:0.85;}
 
 /* ── HEADER ── */
 header{
@@ -337,6 +383,15 @@ td{padding:9px 12px;font-size:13px;vertical-align:middle;}
 </head>
 <body>
 
+<!-- Loading overlay -->
+<div id="loading-overlay">
+  <div class="loading-spin"></div>
+  <div id="loading-msg">Conectando con la base de datos...</div>
+</div>
+
+<!-- Sync banner -->
+<div id="sync-banner"></div>
+
 <header>
   <div class="logo">
     <div class="logo-img">
@@ -351,11 +406,8 @@ td{padding:9px 12px;font-size:13px;vertical-align:middle;}
             <stop offset="100%" style="stop-color:#0d4a6b"/>
           </linearGradient>
         </defs>
-        <!-- Drop shape -->
         <path d="M40 8 C40 8 18 36 18 50 C18 62 28 72 40 72 C52 72 62 62 62 50 C62 36 40 8 40 8Z" fill="url(#dropGrad)"/>
-        <!-- LM letters -->
         <text x="40" y="55" text-anchor="middle" font-family="sans-serif" font-weight="900" font-size="20" fill="white">LM</text>
-        <!-- Wave accent -->
         <path d="M22 58 Q30 52 40 56 Q50 60 58 54" stroke="url(#waveGrad)" stroke-width="3" fill="none" stroke-linecap="round"/>
       </svg>
     </div>
@@ -740,33 +792,96 @@ const PRECIOS_DEFAULT = [
   { nombre: "Dispenser Familiar",                       precio: 8500 },
   { nombre: "Otro",                                     precio: 0    },
 ];
-let listaPrecios = JSON.parse(localStorage.getItem('dlm_precios') || 'null') || PRECIOS_DEFAULT.map(p=>({...p}));
+
+let listaPrecios = PRECIOS_DEFAULT.map(p=>({...p}));
 let CATALOGO = listaPrecios.map(p => p.nombre);
-let pedidos   = JSON.parse(localStorage.getItem('dlm_v2')   || '[]');
-let clientes  = JSON.parse(localStorage.getItem('dlm_cli')  || '[]');
-let gastos    = JSON.parse(localStorage.getItem('dlm_gas')  || '[]');
-let stockData = JSON.parse(localStorage.getItem('dlm_stk')  || 'null');
-let nid  = parseInt(localStorage.getItem('dlm_nid')  || '1');
-let ncid = parseInt(localStorage.getItem('dlm_ncid') || '1');
-let ngid = parseInt(localStorage.getItem('dlm_ngid') || '1');
+let pedidos   = [];
+let clientes  = [];
+let gastos    = [];
+let stockData = null;
+let nid  = 1;
+let ncid = 1;
+let ngid = 1;
 let rcount = 0;
 let acSelIdx = -1;
 let selectedClienteId = null;
 let _cobroMsgs = {};
 let _confirmCallback = null;
 let _pagoTipoCli = null;
+let _fbReady = false;
+let _syncTimer = null;
 
-// ══ SAVE ══
-function save() {
-  localStorage.setItem('dlm_v2',      JSON.stringify(pedidos));
-  localStorage.setItem('dlm_cli',     JSON.stringify(clientes));
-  localStorage.setItem('dlm_gas',     JSON.stringify(gastos));
-  localStorage.setItem('dlm_nid',     nid);
-  localStorage.setItem('dlm_ncid',    ncid);
-  localStorage.setItem('dlm_ngid',    ngid);
-  localStorage.setItem('dlm_precios', JSON.stringify(listaPrecios));
-  if (stockData) localStorage.setItem('dlm_stk', JSON.stringify(stockData));
+// ══ FIREBASE SAVE ══
+function showSyncBanner(state, msg) {
+  const b = document.getElementById('sync-banner');
+  b.className = state;
+  b.textContent = msg;
+  if (state === 'ok') setTimeout(() => { b.style.display='none'; }, 2000);
+}
+
+async function save() {
   refreshStats();
+  if (!_fbReady) return;
+  showSyncBanner('syncing', '☁️ Guardando...');
+  try {
+    const db = window._db;
+    const refFn = window._ref;
+    const setFn = window._set;
+    const data = {
+      pedidos: pedidos || [],
+      clientes: clientes || [],
+      gastos: gastos || [],
+      stockData: stockData || {},
+      listaPrecios: listaPrecios || [],
+      nid, ncid, ngid,
+      ultimaActualizacion: new Date().toISOString()
+    };
+    await setFn(refFn(db, 'distribuidoraLM'), data);
+    showSyncBanner('ok', '✅ Guardado en la nube');
+  } catch(e) {
+    showSyncBanner('error', '❌ Error al guardar: ' + e.message);
+  }
+}
+
+// ══ FIREBASE LOAD + REALTIME SYNC ══
+function initFirebase() {
+  if (!window._firebaseReady) {
+    window.addEventListener('firebaseReady', initFirebase);
+    return;
+  }
+  _fbReady = true;
+  const db = window._db;
+  const refFn = window._ref;
+  const onValueFn = window._onValue;
+
+  // Listen for realtime changes
+  onValueFn(refFn(db, 'distribuidoraLM'), (snapshot) => {
+    const data = snapshot.val();
+    if (data) {
+      pedidos      = data.pedidos      || [];
+      clientes     = data.clientes     || [];
+      gastos       = data.gastos       || [];
+      stockData    = data.stockData    || null;
+      listaPrecios = data.listaPrecios || PRECIOS_DEFAULT.map(p=>({...p}));
+      nid          = data.nid  || (pedidos.length  ? Math.max(...pedidos.map(p=>p.id))+1  : 1);
+      ncid         = data.ncid || (clientes.length ? Math.max(...clientes.map(c=>c.id))+1 : 1);
+      ngid         = data.ngid || (gastos.length   ? Math.max(...gastos.map(g=>g.id))+1   : 1);
+      CATALOGO.length = 0;
+      listaPrecios.forEach(p => CATALOGO.push(p.nombre));
+    }
+    // Hide loading overlay on first load
+    document.getElementById('loading-overlay').classList.add('hidden');
+    // Refresh current view
+    refreshStats();
+    const activeView = document.querySelector('.view.active')?.id?.replace('view-','');
+    if (activeView) {
+      const renders = {registros:renderRegistros,precios:renderPrecios,cobros:renderCobros,clientes:renderClientes,dashboard:renderDashboard,stock:renderStock,gastos:renderGastos,empresa:renderEmpresa};
+      if (renders[activeView]) renders[activeView]();
+    }
+  }, (error) => {
+    document.getElementById('loading-overlay').classList.add('hidden');
+    showSyncBanner('error', '❌ Sin conexión a Firebase. Revisá la configuración.');
+  });
 }
 
 // ══ INIT STOCK ══
@@ -775,7 +890,6 @@ function initStock() {
     stockData = {};
     listaPrecios.forEach(p => { if (p.nombre !== 'Otro') stockData[p.nombre] = { actual: 0, minimo: 5 }; });
   }
-  // Add missing products
   listaPrecios.forEach(p => { if (p.nombre !== 'Otro' && !stockData[p.nombre]) stockData[p.nombre] = { actual: 0, minimo: 5 }; });
 }
 
@@ -991,7 +1105,6 @@ function guardarPedido() {
   const estadoFinal=programar?'programado':'entregado';
   const pedido={id:nid++,clienteId:cObj?cObj.id:null,nombre,tel,dir,fecha:fechaFinal,obs:document.getElementById('np-obs').value.trim(),productos:prods,total,tipoVenta,estado:estadoFinal,saldoPendiente:total,pagos:[],creado:new Date().toISOString()};
   pedidos.unshift(pedido);
-  // Descontar stock si se entrega al instante
   if (estadoFinal==='entregado') descontarStock(prods);
   save(); toast('✅ Pedido guardado'); resetForm();
 }
@@ -1064,8 +1177,6 @@ function nuevoPedidoDesde(id){const c=clientes.find(x=>x.id===id);if(!c)return;d
 function enviarDeudaCliente(id) {
   const c=clientes.find(x=>x.id===id); if(!c||!c.tel) return;
   const d=getDeudaCliente(c.id,c.nombre);
-  const peds=pedidos.filter(p=>(p.clienteId===id||p.nombre.toLowerCase()===c.nombre.toLowerCase())&&p.estado==='pendiente');
-  const det=peds.map(p=>`  • ${ff(p.fecha)}: ${p.productos.map(pr=>`${pr.cantidad}x ${pr.nombre}`).join(', ')} — ${fp(p.total)}`).join('\n');
   let msg=`Hola ${c.nombre}! 👋\nTe saludamos desde *Distribuidora Lugones Montini*.\n\n`;
   if(d.clase==='moroso')msg+=`⚠️ Registramos una deuda vencida de más de 3 meses.\n\n`;
   if(d.montoVencido>0)msg+=`📌 *Deuda vencida: ${fp(d.montoVencido)}*\n`;
@@ -1112,7 +1223,6 @@ function cambiarEst(id) {
   const idx=pedidos.findIndex(x=>x.id===id); if(idx===-1) return;
   const nuevoEst=document.getElementById('mod-est').value;
   const anteriorEst=pedidos[idx].estado;
-  // Si cambia a entregado, descontar stock
   if (nuevoEst==='entregado' && anteriorEst!=='entregado') descontarStock(pedidos[idx].productos);
   pedidos[idx].estado=nuevoEst;
   save(); renderRegistros(); closeModal(); toast('Estado actualizado');
@@ -1130,11 +1240,10 @@ function markChanged(i){document.getElementById('pr-nombre-'+i)?.classList.add('
 function guardarPrecios() {
   const rows=document.querySelectorAll('#precios-tabla .precio-row'); const nueva=[];
   rows.forEach((_,i)=>{const n=document.getElementById('pr-nombre-'+i)?.value.trim();const p=parseFloat(document.getElementById('pr-precio-'+i)?.value)||0;if(n)nueva.push({nombre:n,precio:p});});
-  listaPrecios=nueva; localStorage.setItem('dlm_precios',JSON.stringify(listaPrecios));
+  listaPrecios=nueva;
   CATALOGO.length=0; listaPrecios.forEach(p=>CATALOGO.push(p.nombre));
-  // Sync stock with new products
   if (stockData) listaPrecios.forEach(p=>{if(p.nombre!=='Otro'&&!stockData[p.nombre])stockData[p.nombre]={actual:0,minimo:5};});
-  renderPrecios(); toast('✅ Lista de precios guardada');
+  save(); renderPrecios(); toast('✅ Lista de precios guardada');
 }
 function agregarProductoLista(){listaPrecios.push({nombre:'',precio:0});renderPrecios();setTimeout(()=>document.getElementById('pr-nombre-'+(listaPrecios.length-1))?.focus(),50);}
 function quitarProductoLista(i){showConfirm('🗑️ Quitar producto',`¿Quitar "${listaPrecios[i]?.nombre||'este producto'}" de la lista?`,'Sí, quitar',()=>{listaPrecios.splice(i,1);renderPrecios();});}
@@ -1143,7 +1252,6 @@ function quitarProductoLista(i){showConfirm('🗑️ Quitar producto',`¿Quitar 
 function descontarStock(productos) {
   if (!stockData) return;
   productos.forEach(pr=>{if(stockData[pr.nombre]!==undefined){stockData[pr.nombre].actual=Math.max(0,(stockData[pr.nombre].actual||0)-pr.cantidad);}});
-  localStorage.setItem('dlm_stk',JSON.stringify(stockData));
 }
 function renderStock() {
   initStock();
@@ -1164,8 +1272,7 @@ function guardarStock() {
   initStock();
   const prods=listaPrecios.filter(p=>p.nombre!=='Otro');
   prods.forEach((p,i)=>{const act=parseFloat(document.getElementById('stk-act-'+i)?.value)||0;const min=parseFloat(document.getElementById('stk-min-'+i)?.value)||0;stockData[p.nombre]={actual:act,minimo:min};});
-  localStorage.setItem('dlm_stk',JSON.stringify(stockData));
-  renderStock(); toast('✅ Stock guardado');
+  save(); renderStock(); toast('✅ Stock guardado');
 }
 
 // ══ GASTOS ══
@@ -1182,8 +1289,7 @@ function guardarGasto() {
   const obs=document.getElementById('g-obs').value.trim();
   const gasto={id:ngid++,tipo,concepto,monto,fecha,producto,cantidad,obs,creado:new Date().toISOString()};
   gastos.unshift(gasto);
-  // Si es reabastecimiento, sumar al stock
-  if (tipo==='compra'&&producto&&cantidad>0){initStock();if(stockData[producto]!==undefined)stockData[producto].actual=(stockData[producto].actual||0)+cantidad;localStorage.setItem('dlm_stk',JSON.stringify(stockData));}
+  if (tipo==='compra'&&producto&&cantidad>0){initStock();if(stockData[producto]!==undefined)stockData[producto].actual=(stockData[producto].actual||0)+cantidad;}
   save(); renderGastos();
   ['g-concepto','g-monto','g-obs','g-cantidad'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   document.getElementById('g-producto').value='';
@@ -1273,7 +1379,6 @@ function renderDashboard() {
   const deudaTotal=pedidos.filter(p=>p.estado!=='cancelado').reduce((s,p)=>s+getSaldoPedido(p),0);
   const clientesConDeuda=clientes.filter(c=>getDeudaCliente(c.id,c.nombre).totalDeuda>0).length;
   const clientesMorosos=clientes.filter(c=>getDeudaCliente(c.id,c.nombre).clase==='moroso').length;
-  const clientesActivosMes=new Set(pedsMes.map(p=>p.clienteId||p.nombre.toLowerCase())).size;
   const cantPedsMes=pedsMes.length; const ticketProm=cantPedsMes>0?ventasMes/cantPedsMes:0;
   const variacion=ventasMesAnt>0?((ventasMes-ventasMesAnt)/ventasMesAnt*100).toFixed(1):null;
   const varTexto=variacion!==null?`${variacion>0?'▲':'▼'} ${Math.abs(variacion)}% vs mes anterior`:'Sin datos mes anterior';
@@ -1318,11 +1423,9 @@ function renderEmpresa() {
   const cobradoMes=pedsMes.reduce((s,p)=>s+(p.total-getSaldoPedido(p)),0);
   const deudaTotal=pedidos.filter(p=>p.estado!=='cancelado').reduce((s,p)=>s+getSaldoPedido(p),0);
   const gastosTotal=gastos.reduce((s,g)=>s+g.monto,0);
-  // Stock summary
   initStock();
   const stockBajo=Object.entries(stockData).filter(([,s])=>s.actual<s.minimo&&s.minimo>0);
   const stockAgotado=Object.entries(stockData).filter(([,s])=>s.actual<=0&&s.minimo>0);
-  // Gastos por tipo
   const gastosPorTipo={};
   gastos.forEach(g=>{if(!gastosPorTipo[g.tipo])gastosPorTipo[g.tipo]=0;gastosPorTipo[g.tipo]+=g.monto;});
   const tipoLabel={compra:'Compras',proveedor:'Proveedores',operativo:'Operativos',otro:'Otros'};
@@ -1344,30 +1447,19 @@ function renderEmpresa() {
 }
 
 // ══ IMPORTACIÓN / EXPORTACIÓN ══
+function renderDatos() { /* static view */ }
 
-function renderDatos() { /* static view, nothing to render */ }
-
-// ── EXPORTAR TODO ──
 function exportarTodo() {
-  const data = {
-    version: 2,
-    exportado: new Date().toISOString(),
-    pedidos, clientes, gastos,
-    stockData: stockData || {},
-    listaPrecios,
-    nid, ncid, ngid
-  };
+  const data = { version:2, exportado:new Date().toISOString(), pedidos, clientes, gastos, stockData:stockData||{}, listaPrecios, nid, ncid, ngid };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
+  const a = document.createElement('a'); a.href = url;
   a.download = `distribuidoraLM_respaldo_${new Date().toISOString().split('T')[0]}.json`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
   toast('✅ Respaldo exportado');
 }
 
-// ── IMPORTAR TODO ──
 function importarTodo(event) {
   const file = event.target.files[0]; if (!file) return;
   const reader = new FileReader();
@@ -1375,33 +1467,21 @@ function importarTodo(event) {
     try {
       const data = JSON.parse(e.target.result);
       if (!data.pedidos || !data.clientes) throw new Error('Archivo inválido — faltan datos esenciales');
-      showConfirm(
-        '⬆️ Importar respaldo',
-        `Este archivo tiene ${data.pedidos.length} pedidos, ${data.clientes.length} clientes y ${(data.gastos||[]).length} gastos. ¿Reemplazar todos los datos actuales?`,
-        'Sí, importar',
-        () => {
-          pedidos      = data.pedidos      || [];
-          clientes     = data.clientes     || [];
-          gastos       = data.gastos       || [];
-          stockData    = data.stockData    || null;
-          listaPrecios = data.listaPrecios || listaPrecios;
-          nid          = data.nid          || (pedidos.length ? Math.max(...pedidos.map(p=>p.id))+1 : 1);
-          ncid         = data.ncid         || (clientes.length ? Math.max(...clientes.map(c=>c.id))+1 : 1);
-          ngid         = data.ngid         || (gastos.length ? Math.max(...gastos.map(g=>g.id))+1 : 1);
-          CATALOGO.length = 0; listaPrecios.forEach(p => CATALOGO.push(p.nombre));
-          save();
-          toast(`✅ Importado: ${pedidos.length} pedidos, ${clientes.length} clientes, ${gastos.length} gastos`);
-        }
-      );
-    } catch(err) {
-      toast('❌ Error al importar: ' + err.message);
-    }
+      showConfirm('⬆️ Importar respaldo', `Este archivo tiene ${data.pedidos.length} pedidos, ${data.clientes.length} clientes y ${(data.gastos||[]).length} gastos. ¿Reemplazar todos los datos actuales?`, 'Sí, importar', () => {
+        pedidos=data.pedidos||[]; clientes=data.clientes||[]; gastos=data.gastos||[];
+        stockData=data.stockData||null; listaPrecios=data.listaPrecios||listaPrecios;
+        nid=data.nid||(pedidos.length?Math.max(...pedidos.map(p=>p.id))+1:1);
+        ncid=data.ncid||(clientes.length?Math.max(...clientes.map(c=>c.id))+1:1);
+        ngid=data.ngid||(gastos.length?Math.max(...gastos.map(g=>g.id))+1:1);
+        CATALOGO.length=0; listaPrecios.forEach(p=>CATALOGO.push(p.nombre));
+        save(); toast(`✅ Importado: ${pedidos.length} pedidos, ${clientes.length} clientes, ${gastos.length} gastos`);
+      });
+    } catch(err) { toast('❌ Error al importar: ' + err.message); }
     event.target.value = '';
   };
   reader.readAsText(file);
 }
 
-// ── IMPORTAR MÓDULO (JSON o CSV) ──
 function importarModulo(event, modulo) {
   const file = event.target.files[0]; if (!file) return;
   const ext = file.name.split('.').pop().toLowerCase();
@@ -1409,18 +1489,10 @@ function importarModulo(event, modulo) {
   reader.onload = e => {
     try {
       let data;
-      if (ext === 'json') {
-        data = JSON.parse(e.target.result);
-        if (Array.isArray(data)) data = data;
-        else if (data[modulo]) data = data[modulo];
-        else throw new Error('JSON no contiene datos del módulo "' + modulo + '"');
-      } else {
-        data = parsearCSV(e.target.result, modulo);
-      }
+      if (ext === 'json') { data = JSON.parse(e.target.result); if (Array.isArray(data)) data=data; else if (data[modulo]) data=data[modulo]; else throw new Error('JSON no contiene datos del módulo "'+modulo+'"'); }
+      else { data = parsearCSV(e.target.result, modulo); }
       aplicarImportacion(modulo, data, event);
-    } catch(err) {
-      mostrarResultadoImport(modulo, 'error', '❌ ' + err.message);
-    }
+    } catch(err) { mostrarResultadoImport(modulo, 'error', '❌ ' + err.message); }
     event.target.value = '';
   };
   reader.readAsText(file, 'UTF-8');
@@ -1431,8 +1503,7 @@ function parsearCSV(texto, modulo) {
   if (lines.length < 2) throw new Error('El CSV no tiene datos suficientes');
   const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, '').toLowerCase());
   return lines.slice(1).map(line => {
-    const vals = parsearLineaCSV(line);
-    const obj = {};
+    const vals = parsearLineaCSV(line); const obj = {};
     headers.forEach((h, i) => { obj[h] = (vals[i] || '').replace(/^"|"$/g, '').trim(); });
     return obj;
   }).filter(o => Object.values(o).some(v => v));
@@ -1445,102 +1516,29 @@ function parsearLineaCSV(line) {
     else if (line[i] === ',' && !inQuotes) { result.push(current); current = ''; }
     else { current += line[i]; }
   }
-  result.push(current);
-  return result;
+  result.push(current); return result;
 }
 
 function aplicarImportacion(modulo, data, event) {
   if (!data.length) { mostrarResultadoImport(modulo, 'error', '❌ No se encontraron registros válidos'); return; }
-
   if (modulo === 'pedidos') {
-    const nuevos = data.map(r => ({
-      id: nid++,
-      nombre: r.nombre || r.cliente || '',
-      tel: r.tel || r.telefono || '',
-      dir: r.dir || r.direccion || '',
-      fecha: r.fecha || new Date().toISOString().split('T')[0],
-      obs: r.obs || r.observaciones || '',
-      productos: r.productos ? (typeof r.productos === 'string' ? JSON.parse(r.productos) : r.productos) : [],
-      total: parseFloat(r.total) || 0,
-      tipoVenta: r.tipoventa || r.tipo_venta || r.tipo || 'facturada',
-      estado: r.estado || 'entregado',
-      saldoPendiente: parseFloat(r.saldopendiente || r.saldo || r.total) || 0,
-      pagos: [],
-      creado: r.creado || new Date().toISOString()
-    })).filter(r => r.nombre);
-    pedidos = [...pedidos, ...nuevos];
-    save();
-    mostrarResultadoImport(modulo, 'ok', `✅ ${nuevos.length} pedidos importados`);
-
+    const nuevos = data.map(r => ({ id:nid++,nombre:r.nombre||r.cliente||'',tel:r.tel||r.telefono||'',dir:r.dir||r.direccion||'',fecha:r.fecha||new Date().toISOString().split('T')[0],obs:r.obs||r.observaciones||'',productos:r.productos?(typeof r.productos==='string'?JSON.parse(r.productos):r.productos):[],total:parseFloat(r.total)||0,tipoVenta:r.tipoventa||r.tipo_venta||r.tipo||'facturada',estado:r.estado||'entregado',saldoPendiente:parseFloat(r.saldopendiente||r.saldo||r.total)||0,pagos:[],creado:r.creado||new Date().toISOString() })).filter(r=>r.nombre);
+    pedidos=[...pedidos,...nuevos]; save(); mostrarResultadoImport(modulo,'ok',`✅ ${nuevos.length} pedidos importados`);
   } else if (modulo === 'clientes') {
-    let agregados = 0, actualizados = 0;
-    data.forEach(r => {
-      const nombre = (r.nombre || '').trim(); if (!nombre) return;
-      const ex = clientes.find(c => c.nombre.toLowerCase() === nombre.toLowerCase());
-      if (ex) {
-        if (r.tel && !ex.tel) ex.tel = r.tel;
-        if (r.dir && !ex.dir) ex.dir = r.dir;
-        if (r.notas && !ex.notas) ex.notas = r.notas;
-        actualizados++;
-      } else {
-        clientes.push({ id: ncid++, nombre, tel: r.tel||'', dir: r.dir||'', notas: r.notas||'', creado: new Date().toISOString() });
-        agregados++;
-      }
-    });
-    save();
-    mostrarResultadoImport(modulo, 'ok', `✅ ${agregados} clientes nuevos, ${actualizados} actualizados`);
-
+    let agregados=0,actualizados=0;
+    data.forEach(r=>{const nombre=(r.nombre||'').trim();if(!nombre)return;const ex=clientes.find(c=>c.nombre.toLowerCase()===nombre.toLowerCase());if(ex){if(r.tel&&!ex.tel)ex.tel=r.tel;if(r.dir&&!ex.dir)ex.dir=r.dir;if(r.notas&&!ex.notas)ex.notas=r.notas;actualizados++;}else{clientes.push({id:ncid++,nombre,tel:r.tel||'',dir:r.dir||'',notas:r.notas||'',creado:new Date().toISOString()});agregados++;}});
+    save(); mostrarResultadoImport(modulo,'ok',`✅ ${agregados} clientes nuevos, ${actualizados} actualizados`);
   } else if (modulo === 'gastos') {
-    const nuevos = data.map(r => ({
-      id: ngid++,
-      tipo: r.tipo || 'otro',
-      concepto: r.concepto || r.descripcion || '',
-      monto: parseFloat(r.monto) || 0,
-      fecha: r.fecha || new Date().toISOString().split('T')[0],
-      producto: r.producto || '',
-      cantidad: parseFloat(r.cantidad) || 0,
-      obs: r.obs || r.observaciones || '',
-      creado: new Date().toISOString()
-    })).filter(r => r.concepto && r.monto > 0);
-    gastos = [...gastos, ...nuevos];
-    save();
-    mostrarResultadoImport(modulo, 'ok', `✅ ${nuevos.length} gastos importados`);
-
+    const nuevos=data.map(r=>({id:ngid++,tipo:r.tipo||'otro',concepto:r.concepto||r.descripcion||'',monto:parseFloat(r.monto)||0,fecha:r.fecha||new Date().toISOString().split('T')[0],producto:r.producto||'',cantidad:parseFloat(r.cantidad)||0,obs:r.obs||r.observaciones||'',creado:new Date().toISOString()})).filter(r=>r.concepto&&r.monto>0);
+    gastos=[...gastos,...nuevos]; save(); mostrarResultadoImport(modulo,'ok',`✅ ${nuevos.length} gastos importados`);
   } else if (modulo === 'cobros') {
-    let aplicados = 0, errores = 0;
-    const fechaHoy = new Date().toLocaleDateString('es-AR');
-    data.forEach(r => {
-      const pid = parseInt(r.pedidoid || r.pedido_id || r.id_pedido);
-      const monto = parseFloat(r.monto);
-      if (!pid || !monto || monto <= 0) { errores++; return; }
-      const p = pedidos.find(x => x.id === pid);
-      if (!p) { errores++; return; }
-      const saldo = getSaldoPedido(p);
-      const aAplicar = Math.min(monto, saldo);
-      if (!p.pagos) p.pagos = [];
-      p.pagos.push({ monto: aAplicar, tipo: r.tipo || 'Pago importado', fecha: r.fecha || fechaHoy });
-      p.saldoPendiente = Math.max(0, saldo - aAplicar);
-      aplicados++;
-    });
-    save();
-    mostrarResultadoImport(modulo, 'ok', `✅ ${aplicados} cobros aplicados${errores ? ' · ' + errores + ' no encontrados' : ''}`);
-
+    let aplicados=0,errores=0; const fechaHoy=new Date().toLocaleDateString('es-AR');
+    data.forEach(r=>{const pid=parseInt(r.pedidoid||r.pedido_id||r.id_pedido);const monto=parseFloat(r.monto);if(!pid||!monto||monto<=0){errores++;return;}const p=pedidos.find(x=>x.id===pid);if(!p){errores++;return;}const saldo=getSaldoPedido(p);const aAplicar=Math.min(monto,saldo);if(!p.pagos)p.pagos=[];p.pagos.push({monto:aAplicar,tipo:r.tipo||'Pago importado',fecha:r.fecha||fechaHoy});p.saldoPendiente=Math.max(0,saldo-aAplicar);aplicados++;});
+    save(); mostrarResultadoImport(modulo,'ok',`✅ ${aplicados} cobros aplicados${errores?' · '+errores+' no encontrados':''}`);
   } else if (modulo === 'stock') {
-    initStock();
-    let actualizados = 0;
-    data.forEach(r => {
-      const prod = r.producto || r.nombre || r.product || '';
-      if (!prod) return;
-      // Match flexible
-      const key = Object.keys(stockData).find(k => k.toLowerCase().includes(prod.toLowerCase()) || prod.toLowerCase().includes(k.toLowerCase()));
-      if (key) {
-        if (r.actual !== undefined && r.actual !== '') stockData[key].actual = parseFloat(r.actual) || 0;
-        if (r.minimo !== undefined && r.minimo !== '') stockData[key].minimo = parseFloat(r.minimo) || 0;
-        actualizados++;
-      }
-    });
-    localStorage.setItem('dlm_stk', JSON.stringify(stockData));
-    mostrarResultadoImport(modulo, 'ok', `✅ ${actualizados} productos de stock actualizados`);
+    initStock(); let actualizados=0;
+    data.forEach(r=>{const prod=r.producto||r.nombre||r.product||'';if(!prod)return;const key=Object.keys(stockData).find(k=>k.toLowerCase().includes(prod.toLowerCase())||prod.toLowerCase().includes(k.toLowerCase()));if(key){if(r.actual!==undefined&&r.actual!=='')stockData[key].actual=parseFloat(r.actual)||0;if(r.minimo!==undefined&&r.minimo!=='')stockData[key].minimo=parseFloat(r.minimo)||0;actualizados++;}});
+    save(); mostrarResultadoImport(modulo,'ok',`✅ ${actualizados} productos de stock actualizados`);
   }
 }
 
@@ -1550,7 +1548,6 @@ function mostrarResultadoImport(modulo, tipo, msg) {
   el.innerHTML = `<div style="padding:8px 12px;border-radius:8px;background:${tipo==='ok'?'#d4edda':'#fdf0f0'};color:${tipo==='ok'?'#155724':'var(--danger)'};">${msg}</div>`;
 }
 
-// ── PLANTILLAS CSV ──
 function descargarPlantilla(modulo) {
   const plantillas = {
     pedidos:  'nombre,tel,dir,fecha,total,tipoVenta,estado,obs\n"Kiosco Don Jorge","3493 123456","San Martín 100","2025-03-15","6000","facturada","entregado",""\n"Almacén López","3493 654321","Mitre 200","2025-03-16","12000","canal2","entregado",""',
@@ -1562,21 +1559,18 @@ function descargarPlantilla(modulo) {
   const csv = plantillas[modulo] || '';
   const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = `plantilla_${modulo}.csv`;
+  const a = document.createElement('a'); a.href = url; a.download = `plantilla_${modulo}.csv`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
 
 // ══ INIT ══
 document.addEventListener('DOMContentLoaded', () => {
-  initStock();
   initGastoForm();
   document.getElementById('np-fecha').valueAsDate=new Date();
   addRow();
-  refreshStats();
+  initFirebase();
 });
-
 </script>
 </body>
 </html>
